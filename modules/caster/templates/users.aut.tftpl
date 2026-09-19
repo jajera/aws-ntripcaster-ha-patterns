@@ -1,0 +1,9 @@
+# Managed by Terraform — users.aut
+# Syntax: <USER>:<PASSWORD>
+${admin_username}:${admin_password}
+%{ if ntrip_client_username != "" && ntrip_client_password != "" ~}
+${ntrip_client_username}:${ntrip_client_password}
+%{ endif ~}
+%{ if ntrip_push_username != "" && ntrip_push_password != "" ~}
+${ntrip_push_username}:${ntrip_push_password}
+%{ endif ~}

@@ -1,0 +1,40 @@
+# Copy to terraform.tfvars and fill. Do not commit secrets.
+
+aws_region = "us-east-1"
+
+vpc_id            = "vpc-XXXXXXXX"
+private_subnet_id = "subnet-XXXXXXXX"
+
+admin_cidr_blocks  = ["203.0.113.10/32"] # workstation / office egress
+caster_server_name = "" # empty => instance private IP at bootstrap
+
+enable_nlb = true
+nlb_subnet_ids = [
+  "subnet-XXXXXXXX",
+  "subnet-XXXXXXXX",
+]
+nlb_client_cidr_blocks = ["10.0.0.0/8"]
+
+# Admin ALB (HTTP) + optional Prometheus. Use public subnets when
+# admin_alb_internal = false so admin_cidr_blocks can reach it from the internet.
+enable_admin_alb     = false
+admin_alb_internal   = true
+admin_alb_subnet_ids = [] # defaults to nlb_subnet_ids
+enable_prometheus    = false
+
+# Client pull
+ntrip_client_username = "client"
+ntrip_client_password = "CHANGE_ME"
+
+# Device / NtripServer upload credentials (required)
+ntrip_push_username = "source"
+ntrip_push_password = "CHANGE_ME"
+
+# Optional: override the example mount
+# push_sources = [
+#   {
+#     name       = "my-receiver"
+#     mountpoint = "EXMP00XXX0"
+#     str        = "STR;EXMP00XXX0;Example Site;RTCM 3.2;1004(1),1012(1);2;GPS+GLO;ExampleOrg;XXX;0.00;0.00;0;0;Generic Receiver;none;B;N;9600;"
+#   },
+# ]

@@ -1,0 +1,108 @@
+##################################
+# NtripCaster configuration file #
+################################################################################
+# Managed by Terraform. Do not edit on the instance — change tfvars / templates
+# and re-apply.
+
+############### Server meta info with no functionality #####################
+####
+location ${caster_location}
+name ${caster_display_name}
+url ${caster_url}
+rp_email ${caster_rp_email}
+operator ${caster_operator}
+operator_url ${caster_operator_url}
+
+########################### Server Limits ##################################
+####
+max_clients ${max_clients}
+max_clients_per_source ${max_clients_per_source}
+max_sources ${max_sources}
+max_admins ${max_admins}
+throttle ${throttle}
+
+# maximum number of connections per IP an user can have
+max_ip_connections ${max_ip_connections}
+
+######################### Server passwords #################################
+####
+# encoder_password: Ntrip-1.0 source push. admin/oper: telnet console.
+encoder_password ${encoder_password}
+admin_password ${admin_password}
+oper_password ${oper_password}
+
+# To enable password encryption uncomment next line
+#encrypt_passwords $1$
+
+#################### Server IP/port configuration ##########################
+####
+# server_name must resolve to the IP the caster runs on. Rewritten at bootstrap
+# to caster_server_name, or the instance private IP when that is empty.
+# Port 80 intentionally omitted: needs root, ingest uses ${caster_port} only.
+server_name ${caster_server_name}
+port ${caster_port}
+
+############# Aliases (including virtual host support) #####################
+###
+# usage: alias /alias /mountpoint
+
+############# Relays #######################################################
+###
+# ingest_pattern=${ingest_pattern}
+# relay_iport: caster-side pull of raw IPort (receiver TCP port, often 8857).
+# source_push: no relays — devices upload to :${caster_port} instead.
+%{ for s in relay_sources ~}
+relay pull -m /${s.mountpoint} ${s.ip}:${s.port} -2
+%{ endfor ~}
+
+################################# Sourcetable ##############################
+###
+sourcetablefile sourcetable.dat
+
+######################## Main Server Logfiles ##############################
+###
+logfilename ntripcaster
+usagefilename usage
+#accessfilename access
+logdir ${prefix}/logs
+logfiledebuglevel ${logfile_debug_level}
+watchfilename ${prefix}/var/watchdog.check
+pidfilename ${prefix}/var/caster.pid
+
+############################# Templates ####################################
+###
+templatedir ${prefix}/templates
+
+############################ Console mode ##################################
+###
+# 0: local admin console with log tailing, 1: local admin console,
+# 2: log window, 3: background
+console_mode 2
+
+########################## Reverse Lookups #################################
+###
+reverse_lookups 0
+
+######################## Access Control Lists ##############################
+####
+# acl_policy 0 = deny unless an allow rule matches (default-deny).
+%{ for cidr in acl_client_allow ~}
+allow client ${cidr}
+%{ endfor ~}
+%{ for cidr in acl_admin_allow ~}
+allow admin ${cidr}
+%{ endfor ~}
+
+acl_policy 0
+
+############################ LDAP authentication ###########################
+####
+# Disabled (no ldap_server set).
+#ldap_server 127.0.0.1
+#ldap_uid_prefix uid
+#ldap_people_context ou=people
+
+################################ Security ##################################
+####
+# Sourcetable over UDP is an amplification vector; keep disabled.
+sourcetable_via_udp 0

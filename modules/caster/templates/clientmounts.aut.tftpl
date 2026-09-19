@@ -1,0 +1,9 @@
+# Managed by Terraform — clientmounts.aut
+# /oper = full admin web rights; /admin = limited (no mode=set).
+/admin:${admin_group}
+/oper:${admin_group}
+%{ if ntrip_client_username != "" ~}
+%{ for s in mounts ~}
+/${s.mountpoint}:${client_group}
+%{ endfor ~}
+%{ endif ~}

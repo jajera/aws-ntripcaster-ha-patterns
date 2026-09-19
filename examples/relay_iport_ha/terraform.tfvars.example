@@ -1,0 +1,40 @@
+# Copy to terraform.tfvars and fill. Do not commit secrets.
+# Single-region HA: blue + green in different AZs, one shared NLB (~20s L4 failover).
+
+aws_region = "us-east-1"
+
+vpc_id                  = "vpc-XXXXXXXX"
+blue_private_subnet_id  = "subnet-XXXXXXXX" # AZ-a; must reach receiver IPort
+green_private_subnet_id = "subnet-YYYYYYYY" # AZ-b; must reach receiver IPort
+
+nlb_subnet_ids = [
+  "subnet-XXXXXXXX",
+  "subnet-YYYYYYYY",
+]
+nlb_client_cidr_blocks = ["10.0.0.0/8"] # real client CIDRs (NLB preserves source IP)
+
+# Private hosted zone associated with the VPC (VIP alias → shared NLB).
+route53_zone_id     = "ZXXXXXXXXXXXXX"
+route53_record_name = "ntrip" # VIP = ntrip.<zone-name>
+
+admin_cidr_blocks = [] # prefer SSM; optional direct :2101
+
+ntrip_client_username = "client"
+ntrip_client_password = "CHANGE_ME"
+
+# Optional BNC Docker client for VIP pull + RINEX 3 QC during failover drills.
+enable_client = true
+# bnc_client_subnet_id = ""  # default: blue_private_subnet_id
+# bnc_image            = "ghcr.io/platformfuzz/bkg-ntrip-client-image:sha-7a31c2e"
+# rinex_tools_image    = "ghcr.io/platformfuzz/gnss-rinex-tools-image:latest"
+
+# Optional: override the example receiver
+# field_sources = [
+#   {
+#     name       = "my-receiver"
+#     ip         = "10.0.10.10"
+#     port       = 8857
+#     mountpoint = "EXMP00XXX0"
+#     str        = "STR;EXMP00XXX0;Example Site;RTCM 3.2;1004(1),1012(1);2;GPS+GLO;ExampleOrg;XXX;0.00;0.00;0;0;Generic Receiver;none;B;N;9600;"
+#   },
+# ]
