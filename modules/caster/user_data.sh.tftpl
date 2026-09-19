@@ -1,0 +1,159 @@
+#!/bin/bash
+set -euo pipefail
+
+exec > >(tee /var/log/ntripcaster-bootstrap.log | logger -t user-data -s 2>/dev/console) 2>&1
+
+echo "Starting ntripcaster bootstrap (version ${ntripcaster_version})"
+echo "Ingest inventory: ${field_source_summary}"
+
+dnf -y update
+# AL2023 ships curl-minimal; installing curl conflicts.
+dnf -y install \
+  gcc \
+  make \
+  autoconf \
+  automake \
+  tar \
+  bzip2 \
+  ca-certificates
+
+install -d -m 0755 /usr/local/src
+cd /usr/local/src
+
+TARBALL="${ntripcaster_tarball}"
+URL="${ntripcaster_url}"
+EXPECTED_SHA256="${ntripcaster_sha256}"
+
+curl -fsSL -o "$${TARBALL}" "$${URL}"
+echo "$${EXPECTED_SHA256}  $${TARBALL}" | sha256sum -c -
+
+rm -rf "ntripcaster-${ntripcaster_version}"
+tar -xjf "$${TARBALL}"
+cd "ntripcaster-${ntripcaster_version}"
+
+# Security: strip Access-Control-Allow-Origin: *
+sed -i '/Access-Control-Allow-Origin/d' src/http.c
+
+# Performance: lower relay read retry delay
+sed -i 's/#define READ_RETRY_DELAY 400/#define READ_RETRY_DELAY 50/' src/source.c
+
+./configure
+make -j"$(nproc)"
+make install
+
+PREFIX="${ntripcaster_prefix}"
+CONF_DIR="$${PREFIX}/conf"
+install -d -m 0755 "$${CONF_DIR}"
+
+# server_name / CAS host: explicit tfvars value, else the instance private IP.
+TOKEN=$(curl -fsS -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+PRIVATE_IP=$(curl -fsS -H "X-aws-ec2-metadata-token: $${TOKEN}" http://169.254.169.254/latest/meta-data/local-ipv4)
+SERVER_NAME='${caster_server_name}'
+if [[ -z "$${SERVER_NAME}" ]]; then
+  SERVER_NAME="$${PRIVATE_IP}"
+fi
+
+# Every conf file is rendered by Terraform from templates/*.tftpl and shipped
+# here base64-encoded. Stock *.dist files are deliberately not used.
+echo '${conf_ntripcaster_b64}' | base64 -d >"$${CONF_DIR}/ntripcaster.conf"
+echo '${conf_users_b64}' | base64 -d >"$${CONF_DIR}/users.aut"
+echo '${conf_groups_b64}' | base64 -d >"$${CONF_DIR}/groups.aut"
+echo '${conf_clientmounts_b64}' | base64 -d >"$${CONF_DIR}/clientmounts.aut"
+echo '${conf_sourcemounts_b64}' | base64 -d >"$${CONF_DIR}/sourcemounts.aut"
+echo '${conf_sourcetable_b64}' | base64 -d >"$${CONF_DIR}/sourcetable.dat"
+
+# Only instance-local value the templates cannot know at plan time.
+sed -i -E "s|^server_name[[:space:]].*|server_name $${SERVER_NAME}|" "$${CONF_DIR}/ntripcaster.conf"
+sed -i -E "s|^CAS;[^;]*;|CAS;$${SERVER_NAME};|" "$${CONF_DIR}/sourcetable.dat"
+
+chmod 0640 "$${CONF_DIR}/ntripcaster.conf" "$${CONF_DIR}/users.aut" \
+  "$${CONF_DIR}/groups.aut" "$${CONF_DIR}/clientmounts.aut" \
+  "$${CONF_DIR}/sourcemounts.aut"
+chmod 0644 "$${CONF_DIR}/sourcetable.dat"
+
+if ! id ntripcaster &>/dev/null; then
+  useradd --system --home-dir "$${PREFIX}" --no-create-home --shell /sbin/nologin ntripcaster
+fi
+
+install -d -m 0755 "$${PREFIX}/logs" "$${PREFIX}/var" /run/ntripcaster
+chown -R ntripcaster:ntripcaster "$${PREFIX}" /run/ntripcaster
+
+DAEMON="$${PREFIX}/sbin/ntripdaemon"
+if [[ ! -x "$${DAEMON}" ]]; then
+  echo "ERROR: ntripdaemon not found at $${DAEMON}" >&2
+  find /usr/local -name 'ntripdaemon' -type f 2>/dev/null || true
+  exit 1
+fi
+
+# BKG bin/ntripcaster wrapper always exits 1; start daemon directly.
+cat >/etc/systemd/system/ntripcaster.service <<EOF
+[Unit]
+Description=BKG Professional NtripCaster
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=ntripcaster
+Group=ntripcaster
+WorkingDirectory=$${PREFIX}
+ExecStart=$${DAEMON} -d $${CONF_DIR} -b
+PIDFile=$${PREFIX}/var/caster.pid
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+RuntimeDirectory=ntripcaster
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now ntripcaster.service
+systemctl --no-pager --full status ntripcaster.service || true
+
+%{ if enable_prometheus ~}
+echo "Installing Docker + Prometheus (${prometheus_image})"
+dnf -y install docker
+systemctl enable --now docker
+
+install -d -m 0755 /etc/prometheus
+# Single scrape: local NtripCaster Prometheus endpoint (admin basic auth).
+cat >/etc/prometheus/prometheus.yml <<'PROMEOF'
+global:
+  scrape_interval: 15s
+  external_labels:
+    service: ntripcaster
+
+scrape_configs:
+  - job_name: ntripcaster
+    metrics_path: /admin
+    params:
+      mode: [stats]
+      argument: [prom]
+      nohtml: ["1"]
+    basic_auth:
+      username: '${admin_username}'
+      password: '${admin_password}'
+    static_configs:
+      - targets: ["127.0.0.1:${caster_port}"]
+        labels:
+          instance: ntripcaster
+PROMEOF
+
+docker rm -f prometheus 2>/dev/null || true
+docker run -d \
+  --name prometheus \
+  --restart=always \
+  --network=host \
+  -v /etc/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro \
+  ${prometheus_image} \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --web.listen-address=0.0.0.0:${prometheus_port} \
+  --storage.tsdb.path=/prometheus \
+  --storage.tsdb.retention.time=15d
+
+echo "Prometheus listening on :${prometheus_port} (job ntripcaster)"
+%{ endif ~}
+
+echo "ntripcaster bootstrap complete"

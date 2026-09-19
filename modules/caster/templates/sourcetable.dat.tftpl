@@ -1,0 +1,5 @@
+CAS;${cas_host};${caster_port};${caster.identifier};${caster.operator};${caster.nmea};${caster.country};${caster.latitude};${caster.longitude};${caster.misc}
+NET;${network.identifier};${network.operator};${network.authentication};${network.fee};${network.web_net};${network.web_str};${network.web_reg};${network.misc}
+%{ for s in mounts ~}
+${s.str}
+%{ endfor ~}

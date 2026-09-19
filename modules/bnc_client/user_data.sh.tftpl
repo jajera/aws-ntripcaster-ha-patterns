@@ -1,0 +1,112 @@
+#!/bin/bash
+set -euo pipefail
+exec > >(tee /var/log/bnc-client-bootstrap.log) 2>&1
+
+CASTER_HOST="${caster_host}"
+CASTER_PORT="${caster_port}"
+MOUNT="${mount}"
+NTRIP_USER="${client_user}"
+NTRIP_PASS="${client_pass}"
+BNC_IMAGE="${bnc_image}"
+FMT="${mount_format}"
+COUNTRY="${country}"
+LAT="${latitude}"
+LON="${longitude}"
+
+echo "BNC client bootstrap → $${CASTER_HOST}:$${CASTER_PORT}/$${MOUNT}"
+
+dnf -y install docker
+systemctl enable --now docker
+usermod -aG docker ec2-user 2>/dev/null || true
+
+install -d -m 0755 /opt/bnc/conf /opt/bnc/logs /opt/bnc/rnx
+chown -R 1000:1000 /opt/bnc/logs /opt/bnc/rnx
+
+echo "Waiting for caster DNS/host..."
+for i in $(seq 1 60); do
+  getent hosts "$${CASTER_HOST}" >/dev/null 2>&1 && break
+  timeout 1 bash -c "echo >/dev/tcp/$${CASTER_HOST}/$${CASTER_PORT}" 2>/dev/null && break
+  sleep 2
+done
+
+echo "Pulling $${BNC_IMAGE}..."
+docker pull "$${BNC_IMAGE}"
+
+# Seed a real BNC settings file from the image, then enable auto-start + our mount.
+SEED=$(docker create "$${BNC_IMAGE}")
+docker cp "$${SEED}:/opt/bnc/bnc.conf.default" /opt/bnc/conf/bnc.conf
+docker rm "$${SEED}" >/dev/null
+
+python3 - "$${CASTER_HOST}" "$${CASTER_PORT}" "$${MOUNT}" "$${NTRIP_USER}" "$${NTRIP_PASS}" "$${FMT}" "$${COUNTRY}" "$${LAT}" "$${LON}" <<'PY'
+import pathlib, re, sys
+
+host, port, mount, user, password, fmt, country, lat, lon = sys.argv[1:10]
+path = pathlib.Path("/opt/bnc/conf/bnc.conf")
+text = path.read_text()
+
+caster = f"http://{user}:{password}@{host}:{port}"
+mounts = f"//{user}:{password}@{host}:{port}/{mount} {fmt} {country} {lat} {lon} no 2"
+
+def set_key(src: str, key: str, value: str) -> str:
+    pattern = re.compile(rf"^{re.escape(key)}=.*$", re.M)
+    line = f"{key}={value}"
+    if pattern.search(src):
+        return pattern.sub(line, src, count=1)
+    return re.sub(r"^\[General\]\s*$", f"[General]\n{line}", src, count=1, flags=re.M)
+
+for key, value in (
+    ("autoStart", "1"),
+    ("ntripVersion", "2"),
+    ("casterUrlList", caster),
+    ("mountPoints", mounts),
+    ("logFile", "/srv/bnc/logs/bnclog"),
+    ("rnxPath", "/srv/bnc/rnx"),
+    ("rnxIntr", "15 min"),
+    ("rnxSampl", "1 sec"),
+    ("rnxOnlyWithSKL", "0"),
+    ("rnxVersion", "3"),
+    ("proxyHost", ""),
+    ("proxyPort", ""),
+):
+    text = set_key(text, key, value)
+
+path.write_text(text)
+print("Patched bnc.conf: autoStart=1 + mount + log/rnx paths")
+for line in path.read_text().splitlines():
+    if line.startswith(("autoStart=", "mountPoints=", "casterUrlList=", "logFile=", "rnxPath=", "ntripVersion=")):
+        print(line)
+PY
+
+chown 1000:1000 /opt/bnc/conf/bnc.conf
+chmod 0644 /opt/bnc/conf/bnc.conf
+
+docker rm -f bnc-client 2>/dev/null || true
+# Bypass image ENTRYPOINT: `sh -c '... BNC "$@"'` drops CMD[0] (-nw) into $0,
+# so BNC never gets batch mode and never writes bnclog_* (stays unhealthy).
+docker run -d \
+  --name bnc-client \
+  --restart=always \
+  --user 1000:1000 \
+  -e QT_QPA_PLATFORM=offscreen \
+  -e XDG_RUNTIME_DIR=/tmp/runtime-bncuser \
+  -v /opt/bnc/conf/bnc.conf:/srv/bnc/conf/bnc.conf:ro \
+  -v /opt/bnc/logs:/srv/bnc/logs \
+  -v /opt/bnc/rnx:/srv/bnc/rnx \
+  --entrypoint /opt/bnc/BNC \
+  "$${BNC_IMAGE}" \
+  -nw --conf /srv/bnc/conf/bnc.conf
+
+echo "BNC container status:"
+docker ps --filter name=bnc-client
+sleep 15
+ls -la /opt/bnc/logs /opt/bnc/rnx || true
+docker inspect bnc-client --format 'health={{.State.Health.Status}}' 2>/dev/null || true
+
+# RINEX 3 QC via gnss-rinex-tools-image (custom check; no host wrappers).
+RINEX_TOOLS_IMAGE="${rinex_tools_image}"
+echo "Pulling $${RINEX_TOOLS_IMAGE}..."
+docker pull "$${RINEX_TOOLS_IMAGE}" || echo "WARN: rinex-tools image pull failed"
+
+echo "Bootstrap done. Logs: /opt/bnc/logs  RINEX: /opt/bnc/rnx"
+echo "Check RINEX 3 (after ~15 min):"
+echo "  sudo docker run --rm -v /opt/bnc/rnx:/data:ro $${RINEX_TOOLS_IMAGE} check /data/<file.rnx>"

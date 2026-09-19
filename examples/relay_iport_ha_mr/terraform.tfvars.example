@@ -1,0 +1,59 @@
+# Copy to terraform.tfvars and fill. Do not commit secrets.
+# Multi-region HA: one caster + NLB per region.
+# PRIMARY = ap-southeast-6 (Auckland), SECONDARY = ap-southeast-2 (Sydney).
+# Requires AWS provider >= 6.13.0 (NZ region). Default instance_type = m6i.large.
+
+primary_region   = "ap-southeast-6"
+secondary_region = "ap-southeast-2"
+
+# Dual-account profiles (SSO login both before apply/plan).
+# Set primary_aws_profile to your Auckland account profile name.
+primary_aws_profile   = "REPLACE_ME_AKL_PROFILE"
+secondary_aws_profile = "prod-sso"
+
+# ap-southeast-6 has no m6a; default is m6i.large
+# instance_type = "m6i.large"
+
+# Auckland (PRIMARY) — VPC must reach receiver IPort; private zone associated.
+primary_vpc_id             = "vpc-XXXXXXXX"
+primary_private_subnet_id  = "subnet-XXXXXXXX"
+primary_nlb_subnet_ids = [
+  "subnet-XXXXXXXX",
+  "subnet-YYYYYYYY",
+]
+primary_nlb_client_cidr_blocks = ["10.0.0.0/8"]
+
+# Sydney (SECONDARY)
+secondary_vpc_id            = "vpc-YYYYYYYY"
+secondary_private_subnet_id = "subnet-ZZZZZZZZ"
+secondary_nlb_subnet_ids = [
+  "subnet-AAAAAAAA",
+  "subnet-BBBBBBBB",
+]
+secondary_nlb_client_cidr_blocks = ["10.0.0.0/8"]
+
+# Private hosted zone associated with BOTH VPCs.
+route53_zone_id     = "ZXXXXXXXXXXXXX"
+route53_record_name = "ntrip" # VIP = ntrip.<zone-name>
+
+admin_cidr_blocks = [] # prefer SSM
+
+ntrip_client_username = "client"
+ntrip_client_password = "CHANGE_ME"
+
+# Optional BNC in primary for VIP pull + RINEX QC during failover drills.
+enable_client = true
+# bnc_client_subnet_id = ""
+# bnc_image            = "ghcr.io/platformfuzz/bkg-ntrip-client-image:sha-7a31c2e"
+# rinex_tools_image    = "ghcr.io/platformfuzz/gnss-rinex-tools-image:latest"
+
+# Optional: override the example receiver (both regions relay-pull the same inventory)
+# field_sources = [
+#   {
+#     name       = "my-receiver"
+#     ip         = "10.0.10.10"
+#     port       = 8857
+#     mountpoint = "EXMP00XXX0"
+#     str        = "STR;EXMP00XXX0;Example Site;RTCM 3.2;1004(1),1012(1);2;GPS+GLO;ExampleOrg;XXX;0.00;0.00;0;0;Generic Receiver;none;B;N;9600;"
+#   },
+# ]

@@ -1,0 +1,9 @@
+# Managed by Terraform — groups.aut
+# Syntax: <GROUP>:<USER1>,<USER2>,...
+${admin_group}:${admin_username}
+%{ if ntrip_client_username != "" ~}
+${client_group}:${ntrip_client_username}
+%{ endif ~}
+%{ if ntrip_push_username != "" ~}
+${source_group}:${ntrip_push_username}
+%{ endif ~}

@@ -1,0 +1,9 @@
+# Managed by Terraform — sourcemounts.aut
+# ingest_pattern=${ingest_pattern}
+%{ if ingest_pattern == "source_push" && ntrip_push_username != "" ~}
+%{ for s in mounts ~}
+/${s.mountpoint}:${source_group}
+%{ endfor ~}
+%{ else ~}
+# Empty: relay_iport (or no push user) — no Ntrip v2 source-upload ACL.
+%{ endif ~}
